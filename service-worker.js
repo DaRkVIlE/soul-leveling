@@ -2,7 +2,7 @@
 // Version: v1.1.1
 
 // Version defined in constants.js, but needed here for cache naming before constants load
-const CACHE_VERSION = 'v1.1.1';
+const CACHE_VERSION = 'v1.1.2';
 const CACHE_NAME = `soul-leveling-system-${CACHE_VERSION}`;
 
 // Files to cache on install - ALL final files listed

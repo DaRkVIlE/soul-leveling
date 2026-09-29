@@ -5,9 +5,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 console.log(`Serving static files from: ${__dirname}`);
 app.use(express.static(__dirname));
-app.get('*', (req, res) => {
+app.use((req, res) => {
     const indexPath = path.join(__dirname, 'index.html');
-    console.log(`Serving index.html for non-file request: ${req.path}`);
+    console.log(`Serving index.html for request: ${req.path}`);
     res.sendFile(indexPath, (err) => {
          if (err) {
              console.error("Error sending index.html:", err);

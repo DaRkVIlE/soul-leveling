@@ -1,89 +1,170 @@
-// js/saveLoad.js
-// Version: v1.1.1 - Handles Saving, Loading, Import, Export (Refactored)
+// js/audio.js
+// Version: v1.1.1 - Audio System (BGM and SFX Management)
 
-// Assumes constants (SAVE_KEY, APP_VERSION), gameState defined globally
-// Assumes global functions: deepMerge, initializeState, initializeAudio, initializeQuests,
-// startBackgroundPrompts, startPeriodicChecks, stopBackgroundPrompts, stopPeriodicChecks,
-// updateUI, showErrorModal, showSuccessModal, showModal, setModalContent, hideModal, playSfx
+// Assumes constants, gameState, uiElements defined globally
+console.log("Loading Audio Module...");
 
-console.log("Loading Save/Load Module (Refactored)...");
+let currentBgm = null;
+let currentBgmId = null;
 
-function saveState() {
+const audioElements = {};
+
+function initializeAudio() {
+    console.log("Initializing Audio System...");
+    const audioTags = document.querySelectorAll('audio');
+    audioTags.forEach(el => {
+        audioElements[el.id] = el;
+    });
+
+    const settings = gameState?.settings || {};
+    const baseVol = settings.baseVolume ?? 0.5;
+    const musicVol = settings.musicVolume ?? baseVol;
+    const sfxVol = settings.sfxVolume ?? baseVol;
+
+    setMusicVolume(musicVol);
+    setSfxVolume(sfxVol);
+
+    if (settings.musicEnabled) {
+        determineAndPlayCurrentMusic();
+    }
+}
+
+function playSfx(sfxName) {
+    if (!gameState?.settings?.sfxEnabled) return;
+    const elementId = sfxName.startsWith('sfx-') ? sfxName : `sfx-${sfxName}`;
+    const el = audioElements[elementId] || document.getElementById(elementId);
+    if (!el) {
+        return;
+    }
+
     try {
-        if (typeof gameState === 'undefined' || Object.keys(gameState).length === 0) { return; }
-        gameState.lastLogin = Date.now();
-        const stateString = JSON.stringify(gameState);
-        localStorage.setItem(SAVE_KEY, stateString); // Use specific version key
-    } catch (error) { console.error("Save Error:", error); showErrorModal("Failed to save progress.", "Save Error"); }
+        el.volume = Math.min(1, Math.max(0, gameState.settings.sfxVolume ?? 0.5));
+        el.currentTime = 0;
+        const playPromise = el.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(err => {
+                // Audio autoplay might be blocked before first user gesture
+            });
+        }
+    } catch (e) {
+        console.warn(`Error playing SFX ${sfxName}:`, e);
+    }
 }
 
-function loadState() {
+function playMusic(trackName, loop = true) {
+    if (!gameState?.settings?.musicEnabled) return;
+    const elementId = trackName.startsWith('bgm-') ? trackName : `bgm-${trackName}`;
+    const el = audioElements[elementId] || document.getElementById(elementId);
+
+    if (!el) {
+        console.warn(`BGM track not found: ${trackName}`);
+        return;
+    }
+
+    if (currentBgm === el && !el.paused) {
+        return; // Already playing this track
+    }
+
+    stopMusic();
+
     try {
-        const stateString = localStorage.getItem(SAVE_KEY); // Use specific version key
-        if (stateString) { const loaded = JSON.parse(stateString); if (loaded.level === undefined || loaded.settings === undefined) { throw new Error("Invalid save data structure."); } console.log("Save state found."); return loaded; }
-        console.log("No saved state found."); return null;
-    } catch (error) { console.error("Load Error:", error); showErrorModal(`Failed to load progress: ${error.message}. Resetting.`, "Load Error"); localStorage.removeItem(SAVE_KEY); return null; }
+        currentBgm = el;
+        currentBgmId = trackName;
+        el.loop = loop;
+        el.volume = Math.min(1, Math.max(0, gameState.settings.musicVolume ?? 0.5));
+        el.currentTime = 0;
+        const playPromise = el.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(err => {
+                // Autoplay policy restriction - wait for interaction
+            });
+        }
+    } catch (e) {
+        console.warn(`Error playing BGM ${trackName}:`, e);
+    }
 }
 
-function exportProfile() {
-    try {
-        const stateString = JSON.stringify(gameState, null, 2);
-        const blob = new Blob([stateString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url;
-        const playerNameSafe = gameState.playerName.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'user';
-        a.download = `sl_system_profile_${playerNameSafe}_${APP_VERSION}.json`; // Use constant
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        URL.revokeObjectURL(url); console.log("Profile exported.");
-        showSuccessModal("Spiritual Profile exported successfully.", "Export Complete"); playSfx('success');
-    } catch (error) { console.error("Export Error:", error); showErrorModal(`Failed to export profile: ${error.message}`, "Export Error"); }
+function stopMusic() {
+    if (currentBgm) {
+        try {
+            currentBgm.pause();
+            currentBgm.currentTime = 0;
+        } catch (e) {}
+        currentBgm = null;
+        currentBgmId = null;
+    }
 }
 
-function importProfile(file) {
-    const inputElement = document.getElementById('import-file');
-    try {
-        if (!file) { throw new Error("No file selected."); }
-        if (file.type !== 'application/json') { throw new Error("Invalid file type (must be .json)."); }
-
-        const reader = new FileReader();
-        reader.onload = function(event) {
-            try {
-                const importedState = JSON.parse(event.target.result);
-                if (importedState.level === undefined || importedState.stats === undefined || importedState.settings === undefined) { throw new Error("File does not appear to be a valid profile."); }
-                // Show confirmation modal
-                showModal('prompt');
-                setModalContent( 'Confirm Import', 'Importing profile will overwrite ALL current progress. Are you sure?', `<button id="confirm-import-yes" style="background-color: var(--accent-color); border-color: var(--accent-color); color: var(--bg-color);">Yes, Import</button><button id="confirm-import-no" class="modal-close">Cancel</button>` );
-                // Add listener dynamically
-                const confirmBtn = document.getElementById('confirm-import-yes');
-                if(confirmBtn) { confirmBtn.addEventListener('click', () => executeImport(importedState) , { once: true }); }
-                else { console.error("Cannot find import confirm button."); hideModal(); }
-            } catch (error) { console.error("Import Parse/Validation Error:", error); showErrorModal(`Import failed: ${error.message}`, "Import Error"); }
-            finally { if (inputElement) inputElement.value = ''; } // Clear input
-        };
-        reader.onerror = function() { console.error("File Reading Error:", reader.error); showErrorModal("Error reading the selected file."); if (inputElement) inputElement.value = ''; };
-        reader.readAsText(file);
-    } catch (error) { showErrorModal(error.message, "Import Error"); if (inputElement) inputElement.value = ''; } // Catch initial errors
+function stopAllAudio() {
+    stopMusic();
+    Object.values(audioElements).forEach(el => {
+        try {
+            el.pause();
+            el.currentTime = 0;
+        } catch (e) {}
+    });
 }
 
-// Performs the actual import after confirmation
-function executeImport(importedState) {
-     console.log("Executing profile import...");
-     hideModal(); // Close confirmation
-     stopBackgroundPrompts?.(); stopPeriodicChecks?.(); // Stop tasks
-     gameState = deepMerge(getDefaultGameState(), importedState); // Apply imported state
-     initializeState(); initializeAudio(); initializeQuests(); // Re-initialize systems
-     startBackgroundPrompts?.(); startPeriodicChecks?.(); // Restart tasks
-     console.log("Profile imported successfully.");
-     showSuccessModal("Journey successfully imported.", "Import Complete");
-     updateUI(); playSfx('success');
+function determineAndPlayCurrentMusic() {
+    if (!gameState?.settings?.musicEnabled) {
+        stopMusic();
+        return;
+    }
+
+    if (gameState.currentGate) {
+        if (gameState.currentGate.isRed) {
+            playMusic('red-gate');
+        } else if (gameState.currentGate.isAwakeningGate) {
+            playMusic('awakening-trial');
+        } else {
+            playMusic('gate');
+        }
+    } else if (gameState.context?.monarchDomainActive) {
+        playMusic('monarch-domain');
+    } else if (gameState.settings?.nightMode) {
+        playMusic('dream');
+    } else {
+        playMusic('main');
+    }
 }
 
-// Auto-save periodically
-const autoSaveInterval = setInterval(saveState, 60 * 1000);
-// Save on page unload/close
-window.addEventListener('beforeunload', () => {
-     console.log("Attempting save before unload...");
-     saveState(); // Try to save one last time
-});
+function setMusicEnabled(enabled) {
+    if (gameState?.settings) {
+        gameState.settings.musicEnabled = !!enabled;
+    }
+    if (enabled) {
+        determineAndPlayCurrentMusic();
+    } else {
+        stopMusic();
+    }
+}
 
-console.log("Save/Load Module (Refactored) Loaded OK.");
+function setSfxEnabled(enabled) {
+    if (gameState?.settings) {
+        gameState.settings.sfxEnabled = !!enabled;
+    }
+}
+
+function setMusicVolume(volume) {
+    const vol = Math.min(1, Math.max(0, volume));
+    if (gameState?.settings) {
+        gameState.settings.musicVolume = vol;
+    }
+    if (currentBgm) {
+        currentBgm.volume = vol;
+    }
+}
+
+function setSfxVolume(volume) {
+    const vol = Math.min(1, Math.max(0, volume));
+    if (gameState?.settings) {
+        gameState.settings.sfxVolume = vol;
+    }
+}
+
+function setVolume(volume) {
+    setMusicVolume(volume);
+    setSfxVolume(volume);
+}
+
+console.log("Audio Module Loaded OK.");
